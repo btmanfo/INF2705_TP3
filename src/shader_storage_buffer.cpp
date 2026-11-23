@@ -1,5 +1,7 @@
 #include "shader_storage_buffer.hpp"
 
+#include <utility>
+
 ShaderStorageBuffer::ShaderStorageBuffer()
 {
 }
@@ -12,13 +14,22 @@ ShaderStorageBuffer::ShaderStorageBuffer(ShaderStorageBuffer&& other)
 
 ShaderStorageBuffer::~ShaderStorageBuffer()
 {
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-    glDeleteBuffers(1, &id_);
+    release();
+}
+
+void ShaderStorageBuffer::release()
+{
+    if (id_)
+    {
+        glDeleteBuffers(1, &id_);
+        id_ = 0;
+    }
 }
 
 void ShaderStorageBuffer::allocate(const void* data, GLsizeiptr byteSize, GLenum usage)
 {
-    glGenBuffers(1, &id_);
+    if (!id_)
+        glGenBuffers(1, &id_);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, id_);
     glBufferData(GL_SHADER_STORAGE_BUFFER, byteSize, data, usage);
 }
@@ -41,7 +52,10 @@ void ShaderStorageBuffer::bindAsArray()
 
 ShaderStorageBuffer& ShaderStorageBuffer::operator=(ShaderStorageBuffer&& other)
 {
-    id_ = other.id_;
-    other.id_ = 0;
+    if (this != &other)
+    {
+        release();
+        id_ = std::exchange(other.id_, 0);
+    }
     return *this;
 }

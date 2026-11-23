@@ -11,7 +11,7 @@ find_package(SFML 3 COMPONENTS System Window Graphics CONFIG REQUIRED)
 find_package(glbinding CONFIG REQUIRED)
 
 add_executable(TP3
-    src/main.cpp src/model.cpp src/windmill.cpp
+    src/main.cpp src/model.cpp src/windmill.cpp src/shader_storage_buffer.cpp
     imgui/imgui.cpp imgui/imgui_draw.cpp imgui/imgui_tables.cpp
     imgui/imgui_widgets.cpp imgui/imgui_impl_opengl3.cpp
 )

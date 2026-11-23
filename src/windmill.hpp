@@ -20,9 +20,13 @@ public:
 
     void draw(glm::mat4& projView);
 
+    glm::vec3 flourEmitterPosition() const;
+    glm::vec3 flourEmitterDirection() const;
+
 private:
     void drawModel(Model& model, glm::mat4& projView, glm::mat4& modelMatrix);
-    void drawMillstone(glm::mat4& modelMatrix, glm::mat4& projView);
+    glm::mat4 millstoneMatrix() const;
+    void drawMillstone(glm::mat4& projView);
     glm::mat4 drawBladebeam(glm::mat4& modelMatrix, glm::mat4& projView);
     void drawBladeframe(glm::mat4& modelMatrix, glm::mat4& projView);
     void drawBlades(glm::mat4& modelMatrix, glm::mat4& projView);

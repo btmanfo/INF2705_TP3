@@ -1,13 +1,12 @@
 #version 430 core
 
-// TODO: À remplir
-// layout() in;
+layout(local_size_x = 64) in;
 
 struct Particle
 {
     vec3 position;
     float zOrientation;
-    vec3 velocity;
+    vec4 velocity;
     vec4 color;
     vec2 size;
     float timeToLive;
@@ -28,32 +27,50 @@ uniform float time;
 uniform float deltaTime;
 uniform vec3 emitterPosition;
 uniform vec3 emitterDirection;
+uniform uint particleCount;
 
-// Random [0, 1]
-float rand01()
+float rand01(float seed)
 {
-    return fract(sin(dot(vec2(time*100, gl_GlobalInvocationID.x), vec2(12.9898, 78.233))) * 43758.5453);
+    return fract(sin(dot(vec2(time * 100.0 + seed, float(gl_GlobalInvocationID.x)),
+        vec2(12.9898, 78.233))) * 43758.5453);
 }
 
 void main()
 {
-    // TODO: Mise à jour des particules. À partir de l'entrée, metter à jour la particule.
-    //
-    //       Si le temps de vie est à 0 ou en dessous, on procède à l'initialisation:
-    //           - La particule commence à la position de l'émetteur.
-    //           - Son orientation est aléatoire entre [0, 2pi].
-    //           - La particule va dans la direction à une vitesse de 0.3 unité/s.
-    //           - La particule monte naturellement vers le haut à une vitesse de 0.2 unité/s.
-    //           - La couleur initiale est grise (0.61, 0.52, 0.38).
-    //           - La taille initiale est de 1.2 unité pour chaque segment.
-    //           - Le temps de vie de la particule est entre [2.5, 4.0].
-    //
-    //      Pour la mise à jour:
-    //          - Réduiser le temps de vie.
-    //          - Mise à jour de la position par la méthode d'Euler.
-    //          - L'orientation a une vitesse angulaire constante de 0.5.
-    //          - La couleur devient blanche de façon linéaire selon le temps de vie.
-    //          - L'opacité est à 0.2 et a un effet de fade in/out de [0, 0.2] et [0.8, 1].
-    //          - La taille augmente de façon linéaire jusqu'à 2.5 unité en fonction du temps de vie.
-}
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= uint(dataIn.particles.length()))
+        return;
 
+    // Écrire aussi les emplacements inactifs : après l'échange des buffers,
+    // une nouvelle particule doit trouver un temps de vie nul en entrée.
+    if (index >= particleCount)
+    {
+        dataOut.particles[index] = Particle(vec3(0.0), 0.0, vec4(0.0),
+            vec4(0.0), vec2(0.0), 0.0, 0.0);
+        return;
+    }
+
+    Particle particle = dataIn.particles[index];
+    if (particle.timeToLive <= 0.0)
+    {
+        particle.position = emitterPosition;
+        particle.zOrientation = 6.28318530718 * rand01(0.0);
+        particle.velocity = vec4(0.3 * emitterDirection + vec3(0.0, 0.2, 0.0), 0.0);
+        particle.color = vec4(0.61, 0.52, 0.38, 0.0);
+        particle.size = vec2(1.2);
+        particle.maxTimeToLive = mix(2.5, 4.0, rand01(17.3));
+        particle.timeToLive = particle.maxTimeToLive;
+    }
+    else
+    {
+        particle.timeToLive = max(0.0, particle.timeToLive - deltaTime);
+        particle.position += particle.velocity.xyz * deltaTime;
+        particle.zOrientation += 0.5 * deltaTime;
+        float age = clamp(1.0 - particle.timeToLive / particle.maxTimeToLive, 0.0, 1.0);
+        particle.color.rgb = mix(vec3(0.61, 0.52, 0.38), vec3(1.0), age);
+        particle.color.a = 0.2 * smoothstep(0.0, 0.2, age)
+            * (1.0 - smoothstep(0.8, 1.0, age));
+        particle.size = vec2(mix(1.2, 2.5, age));
+    }
+    dataOut.particles[index] = particle;
+}

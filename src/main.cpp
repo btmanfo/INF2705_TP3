@@ -14,6 +14,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "bezier.hpp"
+#include "shader_storage_buffer.hpp"
 #include <imgui/imgui.h>
 
 #include <inf2705/OpenGLApplication.hpp>
@@ -31,6 +32,25 @@ struct Vertex
     vec4 color;
 };
 
+
+struct Particle
+{
+    glm::vec3 position;
+    GLfloat zOrientation;
+    glm::vec4 velocity; // vec3 avec remplissage
+    glm::vec4 color;
+    glm::vec2 size;
+    GLfloat timeToLive;
+    GLfloat maxTimeToLive;
+};
+
+static_assert(sizeof(Particle) == 64);
+static_assert(offsetof(Particle, zOrientation) == 12);
+static_assert(offsetof(Particle, velocity) == 16);
+static_assert(offsetof(Particle, color) == 32);
+static_assert(offsetof(Particle, size) == 48);
+static_assert(offsetof(Particle, timeToLive) == 56);
+static_assert(offsetof(Particle, maxTimeToLive) == 60);
 
 struct App : public OpenGLApplication
 {
@@ -78,6 +98,7 @@ struct App : public OpenGLApplication
         orientCameraTowardMill();
         initBezier();
         initGrass();
+        initParticles();
     }
 
 
@@ -139,6 +160,12 @@ struct App : public OpenGLApplication
         glDeleteBuffers(1, &grassVbo_);
         glDeleteTextures(1, &grassTexture_);
         glDeleteProgram(grassSP_);
+        glDeleteVertexArrays(1, &particlesVao_);
+        glDeleteTextures(1, &particleTexture_);
+        glDeleteProgram(particlesUpdateSP_);
+        glDeleteProgram(particlesDrawSP_);
+        particles_[0].release();
+        particles_[1].release();
         grass_.release();
         windmill_.release();
         glDeleteVertexArrays(1, &vao_);
@@ -310,6 +337,7 @@ struct App : public OpenGLApplication
         bezierMvpLocation_ = glGetUniformLocation(bezierSP_, "mvp");
 
         loadGrassShader();
+        loadParticleShaders();
 
         mvpUniformLocation_ = glGetUniformLocation(transformSP_,"mvp");
         windmill_.mvpUniformLocation = glGetUniformLocation(transformSP_, "mvp");
@@ -412,6 +440,150 @@ struct App : public OpenGLApplication
         glPatchParameteri(GL_PATCH_VERTICES, previousPatchSize);
         if (wasCulling)
             glEnable(GL_CULL_FACE);
+    }
+
+    GLuint createParticleProgram(const std::vector<GLuint>& shaders, const char* name)
+    {
+        const GLuint program = glCreateProgram();
+        for (GLuint shader : shaders)
+            glAttachShader(program, shader);
+        glLinkProgram(program);
+        checkProgramLinkingError(name, program);
+        for (GLuint shader : shaders)
+        {
+            glDetachShader(program, shader);
+            glDeleteShader(shader);
+        }
+        return program;
+    }
+
+    void loadParticleShaders()
+    {
+        particlesUpdateSP_ = createParticleProgram({
+            loadShaderObject(GL_COMPUTE_SHADER, "./shaders/particlesUpdate.cs.glsl")
+        }, "particlesUpdate");
+        particlesDrawSP_ = createParticleProgram({
+            loadShaderObject(GL_VERTEX_SHADER, "./shaders/particlesDraw.vs.glsl"),
+            loadShaderObject(GL_GEOMETRY_SHADER, "./shaders/particlesDraw.gs.glsl"),
+            loadShaderObject(GL_FRAGMENT_SHADER, "./shaders/particlesDraw.fs.glsl")
+        }, "particlesDraw");
+        particlesTimeLocation_ = glGetUniformLocation(particlesUpdateSP_, "time");
+        particlesDeltaTimeLocation_ = glGetUniformLocation(particlesUpdateSP_, "deltaTime");
+        emitterPositionLocation_ = glGetUniformLocation(particlesUpdateSP_, "emitterPosition");
+        emitterDirectionLocation_ = glGetUniformLocation(particlesUpdateSP_, "emitterDirection");
+        particleCountLocation_ = glGetUniformLocation(particlesUpdateSP_, "particleCount");
+        particlesViewLocation_ = glGetUniformLocation(particlesDrawSP_, "modelView");
+        particlesProjectionLocation_ = glGetUniformLocation(particlesDrawSP_, "projection");
+        particlesTextureLocation_ = glGetUniformLocation(particlesDrawSP_, "textureSampler");
+    }
+
+    void initParticles()
+    {
+        const std::array<Particle, MAX_PARTICLES> initial{};
+        // Les deux buffers sont lus et écrits sur le GPU, puis lus comme sommets.
+        particles_[0].allocate(initial.data(), sizeof(initial), GL_DYNAMIC_COPY);
+        particles_[1].allocate(nullptr, sizeof(initial), GL_DYNAMIC_COPY);
+        glGenVertexArrays(1, &particlesVao_);
+        glBindVertexArray(particlesVao_);
+        for (GLuint attribute = 0; attribute < 4; ++attribute)
+            glEnableVertexAttribArray(attribute);
+        glBindVertexArray(0);
+
+        sf::Image image;
+        if (!image.loadFromFile("../textures/smoke.png"))
+            throw std::runtime_error("Impossible de charger la texture de farine");
+        image.flipVertically();
+        glGenTextures(1, &particleTexture_);
+        glBindTexture(GL_TEXTURE_2D, particleTexture_);
+        const auto size = image.getSize();
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size.x, size.y, 0,
+            GL_RGBA, GL_UNSIGNED_BYTE, image.getPixelsPtr());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    void updateParticles()
+    {
+        totalTime_ += deltaTime_;
+        timerParticles_ += deltaTime_;
+        const float spawnInterval = 0.2f;
+        const unsigned int spawned = static_cast<unsigned int>(timerParticles_ / spawnInterval);
+        timerParticles_ -= static_cast<float>(spawned) * spawnInterval;
+        nParticles_ = std::min(MAX_PARTICLES, nParticles_ + spawned);
+
+        glUseProgram(particlesUpdateSP_);
+        glUniform1f(particlesTimeLocation_, totalTime_);
+        glUniform1f(particlesDeltaTimeLocation_, deltaTime_);
+        const glm::vec3 position = windmill_.flourEmitterPosition();
+        const glm::vec3 direction = windmill_.flourEmitterDirection();
+        glUniform3fv(emitterPositionLocation_, 1, glm::value_ptr(position));
+        glUniform3fv(emitterDirectionLocation_, 1, glm::value_ptr(direction));
+        glUniform1ui(particleCountLocation_, nParticles_);
+        particles_[particleInput_].setBindingIndex(0);
+        particles_[1 - particleInput_].setBindingIndex(1);
+        // Traiter toute la capacité pour garder les emplacements inactifs à zéro.
+        glDispatchCompute((MAX_PARTICLES + 63) / 64, 1, 1);
+    }
+
+    void drawParticles()
+    {
+        if (nParticles_ == 0)
+            return;
+
+        const GLboolean wasBlending = glIsEnabled(GL_BLEND);
+        GLboolean previousDepthMask;
+        GLint srcRgb, dstRgb, srcAlpha, dstAlpha, equationRgb, equationAlpha;
+        GLint previousActiveTexture, previousTexture, previousArrayBuffer;
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+        glGetIntegerv(GL_BLEND_SRC_RGB, &srcRgb);
+        glGetIntegerv(GL_BLEND_DST_RGB, &dstRgb);
+        glGetIntegerv(GL_BLEND_SRC_ALPHA, &srcAlpha);
+        glGetIntegerv(GL_BLEND_DST_ALPHA, &dstAlpha);
+        glGetIntegerv(GL_BLEND_EQUATION_RGB, &equationRgb);
+        glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &equationAlpha);
+        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previousArrayBuffer);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+
+        glEnable(GL_BLEND);
+        glBlendEquation(GL_FUNC_ADD);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+        glUseProgram(particlesDrawSP_);
+        const glm::mat4 view = getViewMatrix();
+        const glm::mat4 projection = getPerspectiveProjectionMatrix();
+        glUniformMatrix4fv(particlesViewLocation_, 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(particlesProjectionLocation_, 1, GL_FALSE, glm::value_ptr(projection));
+        glUniform1i(particlesTextureLocation_, 0);
+        glBindTexture(GL_TEXTURE_2D, particleTexture_);
+        glBindVertexArray(particlesVao_);
+        // Dessiner l'entrée, pendant que le compute shader écrit l'autre buffer.
+        particles_[particleInput_].bindAsArray();
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Particle),
+            reinterpret_cast<void*>(offsetof(Particle, position)));
+        glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, sizeof(Particle),
+            reinterpret_cast<void*>(offsetof(Particle, zOrientation)));
+        glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(Particle),
+            reinterpret_cast<void*>(offsetof(Particle, color)));
+        glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(Particle),
+            reinterpret_cast<void*>(offsetof(Particle, size)));
+        glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(nParticles_));
+        glBindVertexArray(0);
+
+        glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(previousArrayBuffer));
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+        glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+        glDepthMask(previousDepthMask);
+        glBlendFuncSeparate(static_cast<GLenum>(srcRgb), static_cast<GLenum>(dstRgb),
+            static_cast<GLenum>(srcAlpha), static_cast<GLenum>(dstAlpha));
+        glBlendEquationSeparate(static_cast<GLenum>(equationRgb), static_cast<GLenum>(equationAlpha));
+        if (!wasBlending)
+            glDisable(GL_BLEND);
     }
 
     void generateNgon(Vertex vertices[], GLuint elements[], const int nSides)
@@ -523,7 +695,12 @@ struct App : public OpenGLApplication
 
     void orientCameraTowardMill()
     {
-        const glm::vec3 direction = CAMERA_TARGET - cameraPosition_;
+        orientCameraToward(CAMERA_TARGET);
+    }
+
+    void orientCameraToward(const glm::vec3& target)
+    {
+        const glm::vec3 direction = target - cameraPosition_;
         cameraOrientation_.y = std::atan2(-direction.x, -direction.z);
         cameraOrientation_.x = std::atan2(direction.y,
             std::sqrt(direction.x * direction.x + direction.z * direction.z));
@@ -574,6 +751,16 @@ struct App : public OpenGLApplication
             updateBezier();
         ImGui::Checkbox("Show Bezier Spline", &showBezier_);
         ImGui::Checkbox("Show Grass", &showGrass_);
+        ImGui::Checkbox("Show Flour Particles", &showParticles_);
+        if (ImGui::Button("View Flour Particles"))
+        {
+            isAnimatingCamera_ = false;
+            const glm::vec3 emitter = windmill_.flourEmitterPosition();
+            const glm::vec3 direction = windmill_.flourEmitterDirection();
+            cameraPosition_ = emitter + 0.8f * direction + glm::vec3(0.0f, 1.0f, 0.0f)
+                + 2.0f * glm::cross(direction, glm::vec3(0.0f, 1.0f, 0.0f));
+            orientCameraToward(emitter);
+        }
         if (ImGui::Button("Animate Camera"))
         {
             cameraAnimation_ = 0.0f;
@@ -587,6 +774,8 @@ struct App : public OpenGLApplication
             glDeleteProgram(transformSP_);
             glDeleteProgram(bezierSP_);
             glDeleteProgram(grassSP_);
+            glDeleteProgram(particlesUpdateSP_);
+            glDeleteProgram(particlesDrawSP_);
             loadShaderPrograms();
         }
         ImGui::SliderFloat("Wind Speed", &windmill_.windSpeed, 0.0f, 20.0f, "%.2f m/s");
@@ -612,9 +801,27 @@ struct App : public OpenGLApplication
             drawGrass(projView);
         if (showBezier_)
             drawBezier(projView);
+
+        updateParticles();
+        if (showParticles_)
+            drawParticles();
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+        particleInput_ = 1 - particleInput_;
     }
 
 private:
+    static constexpr unsigned int MAX_PARTICLES = 64;
+    ShaderStorageBuffer particles_[2];
+    unsigned int particleInput_ = 0;
+    unsigned int nParticles_ = 0;
+    float totalTime_ = 0.0f, timerParticles_ = 0.0f;
+    bool showParticles_ = true;
+    GLuint particlesVao_ = 0, particleTexture_ = 0;
+    GLuint particlesUpdateSP_ = 0, particlesDrawSP_ = 0;
+    GLint particlesTimeLocation_ = -1, particlesDeltaTimeLocation_ = -1;
+    GLint emitterPositionLocation_ = -1, emitterDirectionLocation_ = -1, particleCountLocation_ = -1;
+    GLint particlesViewLocation_ = -1, particlesProjectionLocation_ = -1, particlesTextureLocation_ = -1;
+
     GLuint grassVao_ = 0, grassVbo_ = 0, grassTexture_ = 0, grassSP_ = 0;
     GLint grassMvpLocation_ = -1, grassModelViewLocation_ = -1, grassTextureLocation_ = -1;
     GLsizei grassVertexCount_ = 0;
@@ -676,9 +883,9 @@ int main(int argc, char* argv[])
     settings.context.stencilBits = 8;
     settings.context.antiAliasingLevel = 4;
     settings.context.majorVersion = 4;
-    settings.context.minorVersion = 0;
+    settings.context.minorVersion = 3;
     settings.context.attributeFlags = sf::ContextSettings::Attribute::Core;
 
     App app;
-    app.run(argc, argv, "TP3 - Bezier et herbe procedurale", settings);
+    app.run(argc, argv, "TP3 - Bezier, herbe et particules", settings);
 }

@@ -64,20 +64,27 @@ void Windmill::drawModel(Model& model, glm::mat4& projView, glm::mat4& modelMatr
     model.draw();
 }
 
-void Windmill::drawMillstone(glm::mat4& modelMatrix, glm::mat4& projView) {
+glm::mat4 Windmill::millstoneMatrix() const
+{
+    glm::mat4 millstone = glm::rotate(walls, 5.0f * rotorAngle, glm::vec3(0.0f, 1.0f, 0.0f));
+    millstone = glm::translate(millstone, glm::vec3(-0.48f, 0.21f, 0.0f));
+    return glm::rotate(millstone, 5.0f * 2.27f * rotorAngle, glm::vec3(1.0f, 0.0f, 0.0f));
+}
 
-    glm::mat4 millstone = modelMatrix;
-    millstone = glm::translate(
-        millstone,
-        glm::vec3(-0.48f, 0.21f, 0.0f)
-    );
-    millstone = glm::rotate(
-        millstone,
-        5.0f * 2.27f * rotorAngle,
-        glm::vec3(1.0f, 0.0f, 0.0f)
-    );
-
+void Windmill::drawMillstone(glm::mat4& projView)
+{
+    glm::mat4 millstone = millstoneMatrix();
     drawModel(millstone_, projView, millstone);
+}
+
+glm::vec3 Windmill::flourEmitterPosition() const
+{
+    return glm::vec3(millstoneMatrix() * glm::vec4(-0.1f, 0.0f, 0.0f, 1.0f));
+}
+
+glm::vec3 Windmill::flourEmitterDirection() const
+{
+    return glm::normalize(glm::vec3(millstoneMatrix() * glm::vec4(-1.0f, 0.0f, 0.0f, 0.0f)));
 }
 
 glm::mat4 Windmill::drawBladebeam(glm::mat4& modelMatrix, glm::mat4& projView) {
@@ -159,7 +166,7 @@ void Windmill::draw(glm::mat4& projView)
     mainbeam = glm::rotate(mainbeam, 5 * rotorAngle, glm::vec3(0.0f, 1.0f, 0.0f));
     drawModel(mainbeam_, projView, mainbeam);
 
-    drawMillstone(mainbeam, projView);
+    drawMillstone(projView);
 
     glm::mat4 blades = drawBladebeam(roof,projView);
     blades = glm::translate(blades, glm::vec3(0.0f, 0.0f, 0.5f));

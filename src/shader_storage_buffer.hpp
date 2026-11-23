@@ -11,19 +11,23 @@ public:
     ShaderStorageBuffer();
     ShaderStorageBuffer(ShaderStorageBuffer&& other);
     ~ShaderStorageBuffer();
-    
+    ShaderStorageBuffer(const ShaderStorageBuffer&) = delete;
+    ShaderStorageBuffer& operator=(const ShaderStorageBuffer&) = delete;
+
+    void release();
+
     void allocate(const void* data, GLsizeiptr byteSize, GLenum usage);
-    
+
     void setBindingIndex(GLuint index);
 
     void updateData(const void* data, GLintptr offset, GLsizeiptr byteSize);
-    
+
     void bindAsArray();
-    
+
     ShaderStorageBuffer& operator=(ShaderStorageBuffer&& other);
-    
+
 private:
-    GLuint id_;
+    GLuint id_ = 0;
 };
 
 #endif // SHADER_STORAGE_BUFFER_H
