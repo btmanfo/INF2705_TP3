@@ -77,6 +77,7 @@ struct App : public OpenGLApplication
         windmill_.initBaseMatrices();
         orientCameraTowardMill();
         initBezier();
+        initGrass();
     }
 
 
@@ -134,6 +135,10 @@ struct App : public OpenGLApplication
         glDeleteVertexArrays(1, &bezierVao_);
         glDeleteBuffers(1, &bezierVbo_);
         glDeleteProgram(bezierSP_);
+        glDeleteVertexArrays(1, &grassVao_);
+        glDeleteBuffers(1, &grassVbo_);
+        glDeleteTextures(1, &grassTexture_);
+        glDeleteProgram(grassSP_);
         grass_.release();
         windmill_.release();
         glDeleteVertexArrays(1, &vao_);
@@ -304,9 +309,109 @@ struct App : public OpenGLApplication
         glDeleteShader(bezierFragment);
         bezierMvpLocation_ = glGetUniformLocation(bezierSP_, "mvp");
 
+        loadGrassShader();
+
         mvpUniformLocation_ = glGetUniformLocation(transformSP_,"mvp");
         windmill_.mvpUniformLocation = glGetUniformLocation(transformSP_, "mvp");
 
+    }
+
+    void loadGrassShader()
+    {
+        const std::array<GLuint, 5> shaders = {
+            loadShaderObject(GL_VERTEX_SHADER, "./shaders/grass.vs.glsl"),
+            loadShaderObject(GL_TESS_CONTROL_SHADER, "./shaders/grass.tcs.glsl"),
+            loadShaderObject(GL_TESS_EVALUATION_SHADER, "./shaders/grass.tes.glsl"),
+            loadShaderObject(GL_GEOMETRY_SHADER, "./shaders/grass.gs.glsl"),
+            loadShaderObject(GL_FRAGMENT_SHADER, "./shaders/grass.fs.glsl")
+        };
+        grassSP_ = glCreateProgram();
+        for (GLuint shader : shaders)
+            glAttachShader(grassSP_, shader);
+        glLinkProgram(grassSP_);
+        checkProgramLinkingError("grass", grassSP_);
+        for (GLuint shader : shaders)
+        {
+            glDetachShader(grassSP_, shader);
+            glDeleteShader(shader);
+        }
+        grassMvpLocation_ = glGetUniformLocation(grassSP_, "mvp");
+        grassModelViewLocation_ = glGetUniformLocation(grassSP_, "modelView");
+        grassTextureLocation_ = glGetUniformLocation(grassSP_, "wheatTexture");
+    }
+
+    void initGrass()
+    {
+        std::vector<glm::vec3> vertices;
+        const float cellSize = 5.0f;
+        for (int z = -25; z < 25; z += 5)
+        {
+            for (int x = -25; x < 25; x += 5)
+            {
+                const bool millClearing = x >= -5 && x < 5 && z >= -15 && z < -5;
+                const bool accessPath = x == 0 && z >= -5;
+                if (millClearing || accessPath)
+                    continue;
+
+                const glm::vec3 a(x, -0.1f, z);
+                const glm::vec3 b(x + cellSize, -0.1f, z);
+                const glm::vec3 c(x, -0.1f, z + cellSize);
+                const glm::vec3 d(x + cellSize, -0.1f, z + cellSize);
+                vertices.insert(vertices.end(), {a, c, b, b, c, d});
+            }
+        }
+        grassVertexCount_ = static_cast<GLsizei>(vertices.size());
+        glGenVertexArrays(1, &grassVao_);
+        glBindVertexArray(grassVao_);
+        glGenBuffers(1, &grassVbo_);
+        glBindBuffer(GL_ARRAY_BUFFER, grassVbo_);
+        glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(glm::vec3), vertices.data(), GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), nullptr);
+        glEnableVertexAttribArray(0);
+        glBindVertexArray(0);
+
+        sf::Image image;
+        if (!image.loadFromFile("../textures/wheat_crop.png"))
+            throw std::runtime_error("Impossible de charger la texture de ble");
+        image.flipVertically();
+        glGenTextures(1, &grassTexture_);
+        glBindTexture(GL_TEXTURE_2D, grassTexture_);
+        const auto size = image.getSize();
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size.x, size.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, image.getPixelsPtr());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    void drawGrass(const glm::mat4& projView)
+    {
+        const GLboolean wasCulling = glIsEnabled(GL_CULL_FACE);
+        GLint previousPatchSize, previousActiveTexture, previousTexture;
+        glGetIntegerv(GL_PATCH_VERTICES, &previousPatchSize);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+
+        glDisable(GL_CULL_FACE);
+        glPatchParameteri(GL_PATCH_VERTICES, 3);
+        glUseProgram(grassSP_);
+        const glm::mat4 view = getViewMatrix();
+        glUniformMatrix4fv(grassMvpLocation_, 1, GL_FALSE, glm::value_ptr(projView));
+        glUniformMatrix4fv(grassModelViewLocation_, 1, GL_FALSE, glm::value_ptr(view));
+        glUniform1i(grassTextureLocation_, 0);
+        glBindTexture(GL_TEXTURE_2D, grassTexture_);
+        glBindVertexArray(grassVao_);
+        glDrawArrays(GL_PATCHES, 0, grassVertexCount_);
+        glBindVertexArray(0);
+
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+        glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+        glPatchParameteri(GL_PATCH_VERTICES, previousPatchSize);
+        if (wasCulling)
+            glEnable(GL_CULL_FACE);
     }
 
     void generateNgon(Vertex vertices[], GLuint elements[], const int nSides)
@@ -468,6 +573,7 @@ struct App : public OpenGLApplication
         if (ImGui::SliderInt("Bezier Number Of Points", &bezierNPoints_, 0, MAX_BEZIER_POINTS))
             updateBezier();
         ImGui::Checkbox("Show Bezier Spline", &showBezier_);
+        ImGui::Checkbox("Show Grass", &showGrass_);
         if (ImGui::Button("Animate Camera"))
         {
             cameraAnimation_ = 0.0f;
@@ -480,6 +586,7 @@ struct App : public OpenGLApplication
             glDeleteProgram(basicSP_);
             glDeleteProgram(transformSP_);
             glDeleteProgram(bezierSP_);
+            glDeleteProgram(grassSP_);
             loadShaderPrograms();
         }
         ImGui::SliderFloat("Wind Speed", &windmill_.windSpeed, 0.0f, 20.0f, "%.2f m/s");
@@ -501,11 +608,18 @@ struct App : public OpenGLApplication
         glUseProgram(transformSP_);
         drawGround(projView);
         windmill_.draw(projView);
+        if (showGrass_)
+            drawGrass(projView);
         if (showBezier_)
             drawBezier(projView);
     }
 
 private:
+    GLuint grassVao_ = 0, grassVbo_ = 0, grassTexture_ = 0, grassSP_ = 0;
+    GLint grassMvpLocation_ = -1, grassModelViewLocation_ = -1, grassTextureLocation_ = -1;
+    GLsizei grassVertexCount_ = 0;
+    bool showGrass_ = true;
+
     static constexpr int MAX_BEZIER_POINTS = 16;
     static constexpr float CAMERA_DURATION = 15.0f;
     const glm::vec3 CAMERA_TARGET{0.0f, 2.0f, -10.0f};
@@ -561,10 +675,10 @@ int main(int argc, char* argv[])
     settings.context.depthBits = 24;
     settings.context.stencilBits = 8;
     settings.context.antiAliasingLevel = 4;
-    settings.context.majorVersion = 3;
-    settings.context.minorVersion = 3;
+    settings.context.majorVersion = 4;
+    settings.context.minorVersion = 0;
     settings.context.attributeFlags = sf::ContextSettings::Attribute::Core;
 
     App app;
-    app.run(argc, argv, "TP3 - Spline Bezier", settings);
+    app.run(argc, argv, "TP3 - Bezier et herbe procedurale", settings);
 }

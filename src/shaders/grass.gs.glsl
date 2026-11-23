@@ -1,43 +1,40 @@
-#version 330 core
+#version 400 core
 
-// TODO: À remplir
-// layout() in;
-// layout() out;
-
-in ATTRIBS_TES_OUT
-{
-    // TODO: Ajouter les attributs si nécessaire
-} attribsIn[];
+layout(points) in;
+layout(triangle_strip, max_vertices = 4) out;
 
 out ATTRIBS_GS_OUT
 {
-    // TODO: Ajouter les attributs si nécessaire
+    vec2 texCoord;
 } attribsOut;
-
 
 uniform mat4 mvp;
 
-// Fonction pseudo aléatoire, utiliser le paramètre co pour avoir une valeur différente en sortie
-float rand(vec2 co){
+float rand(vec2 co)
+{
     return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+void emitCorner(vec3 root, vec3 right, vec3 up, vec2 uv)
+{
+    attribsOut.texCoord = uv;
+    gl_Position = mvp * vec4(root + (uv.x - 0.5) * right + uv.y * up, 1.0);
+    EmitVertex();
 }
 
 void main()
 {
-    // TODO: Générer un brin d'herbe à partir du point en entrée
-    
-    // En premier lieu, on pourra générer des rectangles avec le point comme étant le centre
-    // de la base du prime.
-    // Par la suite, on ajoutera un facteur aléatoire de rotation en y [0, 2pi], puis une
-    // rotation en x [0, 0.1pi] pour "plier" les brins. Utiliser le facteur aléatoire.
-    
-    // On pourra aussi faire varié la taille avec la taille de base et la variation [0, 0.1].
-    const float baseWidth = 0.5;
-    const float varWidth = 0.1;
+    vec3 root = gl_in[0].gl_Position.xyz;
+    float width = 0.5 + 0.1 * rand(root.xz + vec2(13.7, 5.2));
+    float height = 2.4 + 0.5 * rand(root.xz + vec2(8.3, 41.1));
+    float yaw = 6.28318530718 * rand(root.xz + vec2(32.1, 2.7));
+    float tilt = 0.31415926536 * rand(root.xz + vec2(4.6, 19.3));
 
-    // Idem avec la hauteur.
-    const float baseHeight = 2.4;
-    const float varHeight = 0.5;
-    
-    // Pour finir, émission des différents points. N'oublier pas d'écrire chaque attribut de sortie.
+    vec3 right = width * vec3(cos(yaw), 0.0, -sin(yaw));
+    vec3 up = height * vec3(sin(yaw) * sin(tilt), cos(tilt), cos(yaw) * sin(tilt));
+    emitCorner(root, right, up, vec2(0.0, 0.0));
+    emitCorner(root, right, up, vec2(1.0, 0.0));
+    emitCorner(root, right, up, vec2(0.0, 1.0));
+    emitCorner(root, right, up, vec2(1.0, 1.0));
+    EndPrimitive();
 }
